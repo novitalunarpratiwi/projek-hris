@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    // Output folder & source folder (aktifkan kalau nanti build)
+    "outDir": "./dist",
+    "rootDir": "./src",
+
+    // Support environment Node.js
+    "module": "CommonJS",
+    "target": "ES2020",
+    "lib": ["ESNext"],
+    "moduleResolution": "node",
+    "types": ["node"],
+
+    // AUTO Fix: Supaya import express/cors/dotenv tidak error
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+
+    // TypeScript quality settings
+    "strict": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"],
+  "exclude": ["node_modules"]
+}

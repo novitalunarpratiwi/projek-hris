@@ -1,0 +1,447 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// 1. ENUMS
+// ==========================================
+enum Role {
+  superadmin
+  admin
+  employee
+}
+
+enum SubscriptionStatus {
+  Active
+  Inactive
+  Trial
+  Expired
+}
+
+enum PaymentStatus {
+  Pending
+  Success
+  Failed
+  Expired
+}
+
+enum AttendanceStatus {
+  OnTime
+  Late
+  Absent
+  Sick
+  AnnualLeave
+  Permit
+  Holiday
+  Pending
+}
+
+enum LeaveType {
+  Annual
+  Sick
+  Unpaid
+  Maternity
+}
+
+enum LeaveStatus {
+  Pending
+  Approved
+  Rejected
+}
+
+enum UserStatus {
+  Active
+  Inactive
+  Suspended
+}
+
+enum ContractType {
+  Tetap
+  Kontrak
+  Magang
+}
+
+enum PayrollStatus {
+  Draft
+  Review
+  Approved
+  Processing
+  Paid
+  Failed
+  Cancelled
+}
+
+// ==========================================
+// 2. MULTI-TENANCY & SUBSCRIPTION
+// ==========================================
+
+model MasterPlan {
+  id           Int           @id @default(autoincrement())
+  name         String        @unique
+  description  String?       @db.Text
+  price        Decimal       @db.Decimal(15, 2)
+  maxEmployees Int           @default(10)
+  durationDays Int           @default(30)
+  isActive     Boolean       @default(true)
+  created_at   DateTime      @default(now())
+  updated_at   DateTime      @updatedAt
+  transactions Transaction[]
+
+  @@map("master_plans")
+}
+
+model Company {
+  id      Int        @id @default(autoincrement())
+  name    String
+  domain  String?    @unique
+  logo    String?
+  address String?    @db.Text
+  status  UserStatus @default(Active)
+
+  users              User[]
+  subscription       Subscription?
+  transactions       Transaction[]
+  officeSettings     OfficeSetting[]
+  attendanceSettings AttendanceSetting[]
+  positionSalaries   PositionSalary[]
+  holidays           Holiday[]
+  auditLogs          AuditLog[]
+  leaves             Leave[]
+  payrolls           Payroll[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("companies")
+}
+
+model Subscription {
+  id        Int                @id @default(autoincrement())
+  companyId Int                @unique
+  company   Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  planName     String
+  status       SubscriptionStatus @default(Trial)
+  startDate    DateTime           @default(now())
+  endDate      DateTime
+  maxEmployees Int                @default(10)
+  price        Decimal            @default(0) @db.Decimal(15, 2)
+
+  lastTransactionId Int?          @unique
+  lastTransaction   Transaction?  @relation("LastSubscription", fields: [lastTransactionId], references: [id])
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("subscriptions")
+}
+
+model Transaction {
+  id        Int           @id @default(autoincrement())
+  companyId Int
+  company   Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  planId  Int?
+  plan    MasterPlan?   @relation(fields: [planId], references: [id], onDelete: SetNull)
+
+  referenceId   String        @unique 
+  planName      String        
+  amount        Decimal       @db.Decimal(15, 2)
+  status        PaymentStatus @default(Pending)
+  invoiceId     String        @unique 
+  paymentMethod String?
+  snapToken     String?       
+
+  maxEmployeesSnapshot Int
+  durationSnapshot     Int
+
+  paidAt     DateTime?
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+
+  activeSubscription Subscription? @relation("LastSubscription")
+
+  @@index([invoiceId])
+  @@index([status])
+  @@map("transactions")
+}
+
+// ==========================================
+// 3. USER
+// ==========================================
+model User {
+  id        Int      @id @default(autoincrement())
+  companyId Int?     
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  // PERBAIKAN: Employee ID unik per perusahaan
+  employeeId String? 
+  join_date  DateTime? @default(now())
+  name       String
+  email      String    @unique
+  password   String
+  role       Role      @default(employee)
+
+  gender        String?
+  phone         String?
+  grade         String?
+  profile_image String?
+
+  is_verified   Boolean      @default(false)
+  status        UserStatus   @default(Active)
+  contract_type ContractType @default(Kontrak)
+  
+  annual_leave_quota Int @default(12)
+  leave_balance      Int @default(12) 
+
+  positionId Int?
+  position   PositionSalary? @relation(fields: [positionId], references: [id], onDelete: SetNull)
+
+  bank_name        String?
+  bank_account     String?
+  bank_holder_name String?
+
+  fcm_token           String?   @db.Text
+  last_login          DateTime?
+  reset_token         String?   @unique
+  reset_token_expired DateTime?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  notifications Notification[]
+  attendances   Attendance[]
+  leaves        Leave[]
+  auditLogs     AuditLog[]
+  payrolls      Payroll[]
+
+  @@unique([companyId, employeeId]) // Kunci SaaS: ID karyawan unik di dalam perusahaan yang sama
+  @@index([companyId])
+  @@map("users")
+}
+
+// ==========================================
+// 4. ABSENSI & KEHADIRAN
+// ==========================================
+model Attendance {
+  id      Int  @id @default(autoincrement())
+  userId  Int
+  user    User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  leaveId Int?
+  leave   Leave? @relation(fields: [leaveId], references: [id], onDelete: SetNull)
+
+  date     DateTime  @db.Date
+  clockIn  DateTime?
+  clockOut DateTime?
+
+  workHours     Decimal? @default(0) @db.Decimal(10, 2)
+  isLate        Boolean  @default(false)
+  lateDuration  Int?     @default(0)
+  is_holiday    Boolean  @default(false) 
+
+  is_payroll_processed Boolean @default(false)
+  payrollId            Int?
+  payroll              Payroll? @relation(fields: [payrollId], references: [id], onDelete: SetNull)
+
+  status      AttendanceStatus
+  tipeAbsensi String?
+
+  clockInIp       String?
+  clockOutIp      String?
+  clockInDevice   String?
+  clockOutDevice  String? 
+  
+  // PERBAIKAN: Koordinat menggunakan Decimal agar akurat
+  latIn           Decimal? @db.Decimal(10, 8)
+  longIn          Decimal? @db.Decimal(11, 8)
+  latOut          Decimal? @db.Decimal(10, 8)
+  longOut         Decimal? @db.Decimal(11, 8)
+  
+  detailAlamat  String?   @db.Text
+  evidence      String?
+
+  created_at DateTime @default(now())
+
+  @@unique([userId, date]) 
+  @@index([date])
+  @@index([userId])
+  @@map("attendances")
+}
+
+// ==========================================
+// 5. PENGGAJIAN (PAYROLL)
+// ==========================================
+model PositionSalary {
+  id        Int     @id @default(autoincrement())
+  companyId Int
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  positionName        String
+  baseSalary          Decimal @db.Decimal(15, 2)
+  allowance           Decimal @default(0) @db.Decimal(15, 2)
+  mealAllowance       Decimal @default(0) @db.Decimal(15, 2)
+  transportAllowance  Decimal @default(0) @db.Decimal(15, 2)
+  hourlyRate          Decimal @default(0) @db.Decimal(15, 2) 
+  lateDeductionPerMin Decimal @default(0) @db.Decimal(15, 2)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  users User[]
+
+  @@unique([companyId, positionName])
+  @@map("position_salaries")
+}
+
+model Payroll {
+  id     Int  @id @default(autoincrement())
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  companyId Int
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  month Int
+  year  Int
+
+  total_work_hours Decimal @default(0) @db.Decimal(10, 2)
+  total_late_mins  Int     @default(0)
+  total_attendance Int     @default(0)
+
+  basic_salary Decimal @db.Decimal(15, 2)
+
+  meal_allowance_snapshot      Decimal @default(0) @db.Decimal(15, 2)
+  transport_allowance_snapshot Decimal @default(0) @db.Decimal(15, 2)
+  late_deduction_rate_snapshot Decimal @default(0) @db.Decimal(15, 2)
+  hourly_rate_snapshot         Decimal @default(0) @db.Decimal(15, 2)
+
+  allowances Decimal @default(0) @db.Decimal(15, 2)
+  deductions Decimal @default(0) @db.Decimal(15, 2)
+  net_salary Decimal @db.Decimal(15, 2)
+
+  status PayrollStatus @default(Draft)
+
+  attendances Attendance[] 
+
+  reference_id    String? @unique
+  disbursement_id String? @unique
+  payment_method  String  @default("MANUAL")
+  error_log       String? @db.Text
+
+  paid_at    DateTime?
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+
+  @@unique([userId, month, year]) 
+  @@index([month, year])
+  @@index([companyId])
+  @@map("payrolls")
+}
+
+// ==========================================
+// 6. PENGAJUAN IZIN & CUTI
+// ==========================================
+model Leave {
+  id        Int     @id @default(autoincrement())
+  companyId Int
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId    Int
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type            LeaveType
+  startDate       DateTime    @db.Date
+  endDate         DateTime    @db.Date
+  days_taken      Int
+  reason          String?     @db.Text
+  status          LeaveStatus @default(Pending)
+  rejected_reason String?     @db.Text 
+  evidence        String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  attendances Attendance[]
+
+  @@map("leaves")
+}
+
+// ==========================================
+// 7. SISTEM & LOGS
+// ==========================================
+model OfficeSetting {
+  id        Int     @id @default(autoincrement())
+  companyId Int
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  officeName String   @default("Head Office")
+  
+  // PERBAIKAN: Gunakan Decimal agar sinkron dengan perhitungan Geofencing
+  latitude   Decimal  @db.Decimal(10, 8)
+  longitude  Decimal  @db.Decimal(11, 8)
+  
+  radius     Int      @default(100)
+  updated_at DateTime @updatedAt
+
+  @@map("office_settings")
+}
+
+model AttendanceSetting {
+  id        Int     @id @default(autoincrement())
+  companyId Int
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  name        String
+  value       String
+  description String?
+  updated_at  DateTime @updatedAt
+
+  @@unique([companyId, name])
+  @@map("attendance_settings")
+}
+
+model Notification {
+  id         Int      @id @default(autoincrement())
+  userId     Int?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title      String
+  message    String   @db.Text
+  is_read    Boolean  @default(false)
+  created_at DateTime @default(now())
+
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  companyId  Int?
+  company    Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  userId     Int?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String
+  target     String?
+  details    String?  @db.Text
+  created_at DateTime @default(now())
+
+  @@index([companyId])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+model Holiday {
+  id        Int      @id @default(autoincrement())
+  companyId Int?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  date       DateTime @db.Date
+  name       String
+  created_at DateTime @default(now())
+
+  @@unique([companyId, date])
+  @@map("holidays")
+}
